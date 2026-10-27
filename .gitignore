@@ -1,0 +1,29 @@
+# Terraform / OpenTofu
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+*.auto.tfvars
+*.auto.tfvars.json
+terraform.tfvars
+
+# Reusable modules do not commit provider lock files
+.terraform.lock.hcl
+
+# Helm
+modules/**/charts/*.tgz
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
