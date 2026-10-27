@@ -1,0 +1,5 @@
+apiVersion: v2
+name: gpu-alerts
+description: PrometheusRule with GPU health, saturation and cost alerts built on DCGM exporter metrics
+type: application
+version: 0.1.0

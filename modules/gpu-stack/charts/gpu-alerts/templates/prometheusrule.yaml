@@ -1,0 +1,89 @@
+{{- $t := .Values.thresholds -}}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: gpu-alerts
+  labels:
+    release: {{ .Values.releaseLabel | quote }}
+spec:
+  groups:
+    - name: gpu.recording
+      rules:
+        - record: node:gpu_utilization:avg
+          expr: avg by (Hostname) (DCGM_FI_DEV_GPU_UTIL)
+        - record: node:gpu_memory_used:ratio
+          expr: |
+            sum by (Hostname) (DCGM_FI_DEV_FB_USED)
+              /
+            sum by (Hostname) (DCGM_FI_DEV_FB_USED + DCGM_FI_DEV_FB_FREE)
+
+    - name: gpu.health
+      rules:
+        - alert: GPUXidError
+          # XID errors are the driver telling us the hardware or firmware is unhappy.
+          # Some (13, 31, 43) are application faults; 48, 63, 64, 74, 79, 92-95 usually mean
+          # the node should be cordoned and replaced.
+          expr: max_over_time(DCGM_FI_DEV_XID_ERRORS[{{ $t.xidErrorLookback }}]) > 0
+          labels:
+            severity: critical
+          annotations:
+            summary: "XID {{`{{ $value }}`}} on GPU {{`{{ $labels.gpu }}`}} of {{`{{ $labels.Hostname }}`}}"
+            description: >-
+              The NVIDIA driver reported an XID error. Check the code against the NVIDIA XID
+              catalog; for hardware-class errors cordon the node and let Karpenter replace it
+              (kubectl delete nodeclaim).
+
+        - alert: GPUTemperatureHigh
+          expr: DCGM_FI_DEV_GPU_TEMP > {{ $t.temperatureCelsius }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "GPU {{`{{ $labels.gpu }}`}} on {{`{{ $labels.Hostname }}`}} at {{`{{ $value }}`}}°C"
+            description: Sustained high temperature leads to clock throttling and lower throughput.
+
+        - alert: GPUExporterMissing
+          # A GPU node with no DCGM series usually means the driver or device plugin is broken.
+          # Needs kube-state-metrics with --metric-labels-allowlist=nodes=[nvidia.com/gpu.present].
+          expr: |
+            (
+              count by (node) (kube_node_labels{label_nvidia_com_gpu_present="true"})
+              unless on (node)
+              count by (node) (label_replace(DCGM_FI_DEV_GPU_TEMP, "node", "$1", "Hostname", "(.*)"))
+            )
+            and on (node)
+            (time() - kube_node_created > {{ $t.unhealthyForSeconds }})
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "GPU node {{`{{ $labels.node }}`}} is not reporting DCGM metrics"
+            description: >-
+              The node is labelled as a GPU node but DCGM exporter returns nothing for it.
+              Check `kubectl describe node` for nvidia.com/gpu capacity and the device plugin pod logs.
+
+    - name: gpu.saturation
+      rules:
+        - alert: GPUMemoryNearlyFull
+          expr: node:gpu_memory_used:ratio * 100 > {{ $t.memoryUsedPct }}
+          for: {{ $t.memoryUsedPctFor }}
+          labels:
+            severity: warning
+          annotations:
+            summary: "GPU memory on {{`{{ $labels.Hostname }}`}} is {{`{{ $value | humanize }}`}}% used"
+            description: >-
+              vLLM pre-allocates KV cache up to --gpu-memory-utilization, so a high steady value is
+              expected. Alert fires above that line; look for a second process on the GPU or OOMs.
+
+    - name: gpu.cost
+      rules:
+        - alert: GPUIdle
+          # Paying for a GPU that does nothing. Either scale the workload to zero or let
+          # Karpenter consolidate the node away.
+          expr: node:gpu_utilization:avg < {{ $t.idleUtilizationPct }}
+          for: {{ $t.idleFor }}
+          labels:
+            severity: info
+          annotations:
+            summary: "GPUs on {{`{{ $labels.Hostname }}`}} below {{ $t.idleUtilizationPct }}% for {{ $t.idleFor }}"
+            description: Check minReplicaCount of the inference ScaledObject and the NodePool consolidation policy.

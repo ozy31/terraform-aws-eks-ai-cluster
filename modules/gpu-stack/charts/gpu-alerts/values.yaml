@@ -1,0 +1,11 @@
+# Values are rendered by the Terraform module; these defaults exist for `helm lint`.
+releaseLabel: kube-prometheus-stack
+
+thresholds:
+  temperatureCelsius: 85
+  idleUtilizationPct: 5
+  idleFor: 2h
+  memoryUsedPct: 95
+  memoryUsedPctFor: 15m
+  xidErrorLookback: 10m
+  unhealthyForSeconds: 300
