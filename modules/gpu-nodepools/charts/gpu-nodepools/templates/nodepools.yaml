@@ -1,0 +1,53 @@
+{{- range $name, $p := .Values.nodePools }}
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: {{ printf "gpu-%s" $name }}
+spec:
+  weight: {{ $p.weight }}
+  template:
+    metadata:
+      labels:
+        ai.platform/pool: {{ $name | quote }}
+        # Matches the default affinity of the NVIDIA device plugin and DCGM exporter.
+        nvidia.com/gpu.present: "true"
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: {{ $.Values.nodeClass.name }}
+      expireAfter: {{ $p.expireAfter }}
+      taints:
+        - key: nvidia.com/gpu
+          value: "true"
+          effect: NoSchedule
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: {{ toJson $p.capacityTypes }}
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+        - key: kubernetes.io/os
+          operator: In
+          values: ["linux"]
+        - key: karpenter.k8s.aws/instance-family
+          operator: In
+          values: {{ toJson $p.instanceFamilies }}
+        - key: karpenter.k8s.aws/instance-gpu-manufacturer
+          operator: In
+          values: ["nvidia"]
+        - key: karpenter.k8s.aws/instance-gpu-count
+          operator: Lt
+          values: [{{ $p.maxGpusPerNode | quote }}]
+  limits:
+    nvidia.com/gpu: {{ $p.gpuLimit | quote }}
+  disruption:
+    consolidationPolicy: {{ $p.consolidationPolicy }}
+    consolidateAfter: {{ $p.consolidateAfter }}
+    budgets:
+      # GPU nodes take minutes to come back (image pull + model load),
+      # so never rotate more than this many at once.
+      - nodes: {{ $p.disruptionNodes | quote }}
+{{- end }}

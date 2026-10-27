@@ -1,0 +1,23 @@
+# Values are rendered by the Terraform module; these defaults exist for `helm lint`.
+clusterName: ""
+nodeRole: ""
+tags: {}
+
+nodeClass:
+  name: gpu
+  os: al2023
+  amiAliasVersion: latest
+  rootVolumeSizeGiB: 200
+  instanceStoreRaid: true
+
+nodePools:
+  inference:
+    instanceFamilies: ["g6", "g6e", "g5"]
+    capacityTypes: ["spot", "on-demand"]
+    maxGpusPerNode: "5"
+    gpuLimit: "16"
+    weight: 50
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 10m
+    expireAfter: 720h
+    disruptionNodes: "1"
