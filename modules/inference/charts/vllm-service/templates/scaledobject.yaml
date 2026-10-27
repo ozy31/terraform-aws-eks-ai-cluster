@@ -1,0 +1,53 @@
+{{- if .Values.autoscaling.enabled }}
+{{- $a := .Values.autoscaling -}}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    {{- include "vllm.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ .Release.Name }}
+  minReplicaCount: {{ $a.minReplicas }}
+  maxReplicaCount: {{ $a.maxReplicas }}
+  pollingInterval: 15
+  cooldownPeriod: {{ $a.cooldownSeconds }}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          # A new replica costs a GPU node; add one at a time and let it warm up.
+          stabilizationWindowSeconds: 60
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 120
+        scaleDown:
+          stabilizationWindowSeconds: 600
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 300
+  triggers:
+    # Requests queued inside vLLM because the KV cache or batch is full. CPU and
+    # GPU utilization are poor signals for LLM serving; queue depth is not.
+    - type: prometheus
+      metadata:
+        serverAddress: {{ $a.prometheusUrl | quote }}
+        query: >-
+          sum(vllm:num_requests_waiting{namespace="{{ .Release.Namespace }}",model_name="{{ .Values.model.servedName }}"})
+          or vector(0)
+        threshold: {{ $a.waitingPerPod | quote }}
+        activationThreshold: "0"
+    {{- with $a.wakeQuery }}
+    # With zero replicas vLLM exports nothing, so the queue trigger can never fire.
+    # Wake on traffic seen upstream (gateway / ingress request counter) instead.
+    - type: prometheus
+      metadata:
+        serverAddress: {{ $a.prometheusUrl | quote }}
+        query: {{ . | quote }}
+        threshold: "1"
+        activationThreshold: "0"
+    {{- end }}
+{{- end }}

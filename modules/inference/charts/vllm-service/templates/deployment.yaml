@@ -1,0 +1,145 @@
+{{- $m := .Values.model -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    {{- include "vllm.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ max 1 .Values.autoscaling.minReplicas }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Bring the new replica up (new GPU node + model load) before the old one goes.
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "vllm.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vllm.labels" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      nodeSelector:
+        ai.platform/pool: {{ .Values.nodePool | quote }}
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "vllm.selectorLabels" . | nindent 14 }}
+      containers:
+        - name: vllm
+          image: {{ printf "%s:%s" .Values.image.repository .Values.image.tag | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["vllm", "serve"]
+          args:
+            - /models
+            - --served-model-name={{ $m.servedName }}
+            - --host=0.0.0.0
+            - --port=8000
+            - --tensor-parallel-size={{ $m.tensorParallelSize }}
+            - --max-model-len={{ $m.maxModelLen }}
+            - --gpu-memory-utilization={{ $m.gpuMemoryUtilization }}
+            - --disable-log-requests
+            {{- range $m.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          env:
+            - name: HOME
+              value: /tmp
+            # Weights come from the read-only mount; never reach out to the Hub.
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: HF_HOME
+              value: /cache/huggingface
+            - name: VLLM_CACHE_ROOT
+              value: /cache/vllm
+            - name: VLLM_NO_USAGE_STATS
+              value: "1"
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          resources:
+            requests:
+              cpu: {{ .Values.resources.cpu | quote }}
+              memory: {{ .Values.resources.memory }}
+              nvidia.com/gpu: {{ $m.tensorParallelSize }}
+            limits:
+              memory: {{ .Values.resources.memory }}
+              nvidia.com/gpu: {{ $m.tensorParallelSize }}
+          # Loading weights and capturing CUDA graphs takes minutes; give it up to 30.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 180
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            failureThreshold: 6
+          lifecycle:
+            # Let the Service drop the endpoint before in-flight generations are cut.
+            preStop:
+              sleep:
+                seconds: 15
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: models
+              mountPath: /models
+              readOnly: true
+            - name: cache
+              mountPath: /cache
+            - name: tmp
+              mountPath: /tmp
+            # NCCL and PyTorch dataloaders use shared memory between tensor-parallel ranks.
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-models
+            readOnly: true
+        - name: cache
+          emptyDir:
+            sizeLimit: 20Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 5Gi
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.resources.shm }}

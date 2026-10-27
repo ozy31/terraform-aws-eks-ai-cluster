@@ -1,0 +1,34 @@
+# Values are rendered by the Terraform module; these defaults exist for `helm lint`.
+image:
+  repository: vllm/vllm-openai
+  tag: v0.32.0
+
+model:
+  bucket: example-models
+  region: eu-west-1
+  s3Prefix: qwen/Qwen3-8B
+  servedName: qwen3-8b
+  tensorParallelSize: 1
+  maxModelLen: 8192
+  gpuMemoryUtilization: 0.9
+  extraArgs: []
+
+nodePool: inference
+
+resources:
+  cpu: "4"
+  memory: 32Gi
+  shm: 8Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 4
+  waitingPerPod: 5
+  prometheusUrl: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
+  cooldownSeconds: 900
+  wakeQuery: ""
+
+serviceMonitor:
+  enabled: true
+  releaseLabel: kube-prometheus-stack

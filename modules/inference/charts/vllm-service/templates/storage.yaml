@@ -1,0 +1,47 @@
+# Static PV backed by the Mountpoint for Amazon S3 CSI driver. The driver's
+# Pod Identity role only allows read access to the model bucket.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ include "vllm.pvName" . }}
+  labels:
+    {{- include "vllm.labels" . | nindent 4 }}
+spec:
+  capacity:
+    storage: 1Ti # ignored by Mountpoint, required by the API
+  accessModes:
+    - ReadOnlyMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef:
+    namespace: {{ .Release.Namespace }}
+    name: {{ .Release.Name }}-models
+  mountOptions:
+    - read-only
+    - allow-other
+    - uid=1000
+    - gid=1000
+    - {{ printf "region %s" .Values.model.region }}
+    - {{ printf "prefix %s/" .Values.model.s3Prefix }}
+    # Model files never change under a running replica; cache metadata aggressively.
+    - metadata-ttl indefinite
+  csi:
+    driver: s3.csi.aws.com
+    volumeHandle: {{ include "vllm.pvName" . }}
+    volumeAttributes:
+      bucketName: {{ required "model.bucket is required" .Values.model.bucket | quote }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-models
+  labels:
+    {{- include "vllm.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadOnlyMany
+  storageClassName: ""
+  volumeName: {{ include "vllm.pvName" . }}
+  resources:
+    requests:
+      storage: 1Ti

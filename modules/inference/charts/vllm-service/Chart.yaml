@@ -1,0 +1,6 @@
+apiVersion: v2
+name: vllm-service
+description: vLLM OpenAI-compatible model server with S3-mounted weights and KEDA queue-depth autoscaling
+type: application
+version: 0.1.0
+appVersion: "v0.32.0"
